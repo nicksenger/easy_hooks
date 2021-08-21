@@ -1,0 +1,12 @@
+[package]
+name = "easy_hooks"
+version = "0.1.0"
+authors = ["Nick Senger <dev@nsenger.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anymap = "0.12.1"
+slotmap = "1.0.5"
+topo = "0.13.2"
