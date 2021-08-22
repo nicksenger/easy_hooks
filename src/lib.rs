@@ -1,7 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use anymap::any::Any;
@@ -26,10 +25,10 @@ pub fn sweep() {
 pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> LocalState<T> {
     let id = Id::new();
 
-    if !state_exists_for_id::<T>(id) {
-        set_state_with_id::<T>(data_fn(), id);
-    } else if !state_marked_with_id::<T>(id) {
-        mark_state_with_id::<T>(id);
+    if !state_exists_for_id::<Rc<RefCell<T>>>(id) {
+        set_state_with_id::<Rc<RefCell<T>>>(Rc::new(RefCell::new(data_fn())), id);
+    } else if !state_marked_with_id::<Rc<RefCell<T>>>(id) {
+        mark_state_with_id::<Rc<RefCell<T>>>(id);
     }
 
     LocalState::new(id)
@@ -44,31 +43,90 @@ pub fn create_context<T: 'static>() -> Context<T> {
     Context::new(id)
 }
 
+pub struct LocalState<T> {
+    data: Rc<RefCell<T>>,
+}
+
+impl<T> std::fmt::Debug for LocalState<T>
+where
+    T: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({:#?})", self.data)
+    }
+}
+
+impl<T> Clone for LocalState<T> {
+    fn clone(&self) -> LocalState<T> {
+        LocalState::<T> {
+            data: self.data.clone(),
+        }
+    }
+}
+
+impl<T> LocalState<T>
+where
+    T: 'static,
+{
+    fn new(id: Id) -> LocalState<T> {
+        LocalState {
+            data: read_state_with_id::<Rc<RefCell<T>>, _, Rc<RefCell<T>>>(id, |x| x.clone()),
+        }
+    }
+
+    pub fn set<F: FnOnce(&mut T) -> U, U>(&self, func: F) -> U {
+        func(&mut self.data.borrow_mut())
+    }
+
+    pub fn get<F: FnOnce(&T) -> U, U>(&self, func: F) -> U {
+        func(&self.data.borrow())
+    }
+}
+
 pub struct Context<T> {
     id: Id,
-    _phantom: PhantomData<T>,
+    data: Rc<RefCell<Option<Rc<RefCell<T>>>>>,
 }
 
 impl<T: 'static> Context<T> {
     fn new(id: Id) -> Self {
         Self {
             id,
-            _phantom: PhantomData,
+            data: Rc::new(RefCell::new(None)),
         }
     }
 
-    pub fn get<U, F: FnOnce(&Rc<T>) -> U>(&self, f: F) -> U {
-        if !state_exists_for_id::<Rc<T>>(self.id) {
+    pub fn get(&self) -> ContextState<T> {
+        if self.data.borrow().is_none() {
             panic!("Attempted to get data from a context which was never set.")
-        } else if !state_marked_with_id::<Rc<T>>(self.id) {
-            mark_state_with_id::<Rc<T>>(self.id);
+        } else if !state_marked_with_id::<Rc<RefCell<T>>>(self.id) {
+            mark_state_with_id::<Rc<RefCell<T>>>(self.id);
         }
 
-        read_state_with_id(self.id, f)
+        read_state_with_id::<Rc<RefCell<T>>, _, ContextState<T>>(self.id, |x| {
+            ContextState::new(x.clone())
+        })
     }
 
     pub fn set(&self, data: T) {
-        set_state_with_id(Rc::new(data), self.id)
+        let data = Rc::new(RefCell::new(data));
+        *self.data.borrow_mut() = Some(data.clone());
+        set_state_with_id(data, self.id)
+    }
+}
+
+#[derive(Clone)]
+pub struct ContextState<T> {
+    data: Rc<RefCell<T>>,
+}
+
+impl<T> ContextState<T> {
+    fn new(data: Rc<RefCell<T>>) -> Self {
+        Self { data }
+    }
+
+    pub fn get<U, F: FnOnce(&T) -> U>(&self, f: F) -> U {
+        f(&self.data.borrow())
     }
 }
 
@@ -100,59 +158,11 @@ fn remove_state_with_id<T: 'static>(id: Id) -> Option<T> {
     STORE.with(|store_refcell| store_refcell.borrow_mut().remove_state_with_id::<T>(&id))
 }
 
-fn update_state_with_id<T: 'static, F: FnOnce(&mut T) -> U, U>(id: Id, func: F) -> U {
-    let mut item = remove_state_with_id::<T>(id).expect("State does not exist.");
-    let updated = func(&mut item);
-    set_state_with_id(item, id);
-    updated
-}
-
 fn read_state_with_id<T: 'static, F: FnOnce(&T) -> R, R>(id: Id, func: F) -> R {
     let item = remove_state_with_id::<T>(id).expect("State does not exist.");
     let read = func(&item);
     set_state_with_id(item, id);
     read
-}
-
-pub struct LocalState<T> {
-    id: Id,
-    _phantom_data: PhantomData<T>,
-}
-
-impl<T> std::fmt::Debug for LocalState<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({:#?})", self.id)
-    }
-}
-
-impl<T> Copy for LocalState<T> {}
-impl<T> Clone for LocalState<T> {
-    fn clone(&self) -> LocalState<T> {
-        LocalState::<T> {
-            id: self.id,
-            _phantom_data: PhantomData::<T>,
-        }
-    }
-}
-
-impl<T> LocalState<T>
-where
-    T: 'static,
-{
-    fn new(id: Id) -> LocalState<T> {
-        LocalState {
-            id,
-            _phantom_data: PhantomData,
-        }
-    }
-
-    pub fn set<F: FnOnce(&mut T) -> U, U>(self, func: F) -> U {
-        update_state_with_id(self.id, func)
-    }
-
-    pub fn get<F: FnOnce(&T) -> R, R>(self, func: F) -> R {
-        read_state_with_id(self.id, func)
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]
