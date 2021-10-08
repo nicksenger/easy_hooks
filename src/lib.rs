@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -9,6 +9,7 @@ use slotmap::{DefaultKey, DenseSlotMap, Key, SecondaryMap};
 pub use topo::{call_in_slot, nested, root};
 
 thread_local! {
+    static CONTEXT_ID: Cell<u64> = Cell::new(0);
     static STORE: RefCell<Store> = RefCell::new(Store::new());
 }
 
@@ -31,6 +32,15 @@ pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> State<T> {
     }
 
     State::new(id)
+}
+
+/// Creates a new context with the provided type.
+pub fn create_context<T: 'static>() -> Context<T> {
+    let context_id = CONTEXT_ID.with(|id| id.get());
+    let id = Id::in_context(context_id);
+    CONTEXT_ID.with(|id| id.set(id.get() + 1));
+
+    Context::new(id)
 }
 
 pub struct State<T> {
@@ -76,6 +86,53 @@ where
 
     pub fn get<F: FnOnce(&T) -> U, U>(&self, func: F) -> U {
         func(&self.data.borrow())
+    }
+}
+
+pub struct Context<T> {
+    id: Id,
+    data: Rc<RefCell<Option<*const T>>>,
+}
+
+impl<T: 'static> Context<T> {
+    fn new(id: Id) -> Self {
+        Self {
+            id,
+            data: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    pub fn get(&self) -> ContextState<T> {
+        if self.data.borrow().is_none() {
+            panic!("Attempted to get data from a context which was never set.")
+        } else if !state_marked_with_id::<*const T>(self.id) {
+            mark_state_with_id::<*const T>(self.id);
+        }
+
+        read_state_with_id::<*const T, _, ContextState<T>>(self.id, |x| {
+            ContextState::new(*x)
+        })
+    }
+
+    pub fn set<'a>(&self, data: &'a T) {
+        let data = data as *const T;
+        *self.data.borrow_mut() = Some(data);
+        set_state_with_id(data, self.id)
+    }
+}
+
+#[derive(Clone)]
+pub struct ContextState<T> {
+    data: *const T,
+}
+
+impl<T: 'static> ContextState<T> {
+    fn new(data: *const T) -> Self {
+        Self { data }
+    }
+
+    pub fn get<'a, U, F: FnOnce(&'a T) -> U>(&self, f: F) -> U {
+        f(unsafe { &*(self.data) })
     }
 }
 
@@ -125,6 +182,10 @@ impl Id {
         Self {
             id: topo::CallId::current(),
         }
+    }
+
+    fn in_context(context_id: u64) -> Self {
+        topo::root(|| topo::call_in_slot(&context_id, Self::new))
     }
 }
 
