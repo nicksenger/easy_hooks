@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -9,7 +9,6 @@ use slotmap::{DefaultKey, DenseSlotMap, Key, SecondaryMap};
 pub use topo::{call_in_slot, nested, root};
 
 thread_local! {
-    static CONTEXT_ID: Cell<u64> = Cell::new(0);
     static STORE: RefCell<Store> = RefCell::new(Store::new());
 }
 
@@ -32,15 +31,6 @@ pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> LocalState<T> {
     }
 
     LocalState::new(id)
-}
-
-/// Creates a new context with the provided type.
-pub fn create_context<T: 'static>() -> Context<T> {
-    let context_id = CONTEXT_ID.with(|id| id.get());
-    let id = Id::in_context(context_id);
-    CONTEXT_ID.with(|id| id.set(id.get() + 1));
-
-    Context::new(id)
 }
 
 pub struct LocalState<T> {
@@ -80,53 +70,6 @@ where
 
     pub fn get<F: FnOnce(&T) -> U, U>(&self, func: F) -> U {
         func(&self.data.borrow())
-    }
-}
-
-pub struct Context<T> {
-    id: Id,
-    data: Rc<RefCell<Option<Rc<RefCell<T>>>>>,
-}
-
-impl<T: 'static> Context<T> {
-    fn new(id: Id) -> Self {
-        Self {
-            id,
-            data: Rc::new(RefCell::new(None)),
-        }
-    }
-
-    pub fn get(&self) -> ContextState<T> {
-        if self.data.borrow().is_none() {
-            panic!("Attempted to get data from a context which was never set.")
-        } else if !state_marked_with_id::<Rc<RefCell<T>>>(self.id) {
-            mark_state_with_id::<Rc<RefCell<T>>>(self.id);
-        }
-
-        read_state_with_id::<Rc<RefCell<T>>, _, ContextState<T>>(self.id, |x| {
-            ContextState::new(x.clone())
-        })
-    }
-
-    pub fn set(&self, data: T) {
-        let data = Rc::new(RefCell::new(data));
-        *self.data.borrow_mut() = Some(data.clone());
-        set_state_with_id(data, self.id)
-    }
-}
-
-#[derive(Clone)]
-pub struct ContextState<T> {
-    data: Rc<RefCell<T>>,
-}
-
-impl<T> ContextState<T> {
-    fn new(data: Rc<RefCell<T>>) -> Self {
-        Self { data }
-    }
-
-    pub fn get<U, F: FnOnce(&T) -> U>(&self, f: F) -> U {
-        f(&self.data.borrow())
     }
 }
 
@@ -176,10 +119,6 @@ impl Id {
         Self {
             id: topo::CallId::current(),
         }
-    }
-
-    fn in_context(context_id: u64) -> Self {
-        topo::root(|| topo::call_in_slot(&context_id, Self::new))
     }
 }
 
@@ -320,5 +259,31 @@ impl Store {
             Mode::A => &mut self.data_a,
             Mode::B => &mut self.data_b,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn set_count(n: i32) -> LocalState<i32> {
+        root(|| use_state(|| n))
+    }
+
+    #[test]
+    fn test_counts() {
+        let count = set_count(42);
+        assert_eq!(42, count.get(|n| *n));
+        let count = set_count(500); // noop because count already set
+        assert_eq!(42, count.get(|n| *n));
+
+        sweep();
+
+        assert_eq!(42, count.get(|n| *n));
+
+        sweep();
+        sweep();
+
+        let count = set_count(500);
+        assert_eq!(500, count.get(|n| *n));
     }
 }
