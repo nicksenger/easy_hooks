@@ -21,7 +21,7 @@ pub fn sweep() {
 
 /// Creates new local state with the given `data_fn`, or provides a handle to the local state
 /// if it already exists.
-pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> LocalState<T> {
+pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> State<T> {
     let id = Id::new();
 
     if !state_exists_for_id::<Rc<RefCell<T>>>(id) {
@@ -30,14 +30,14 @@ pub fn use_state<T: 'static, F: FnOnce() -> T>(data_fn: F) -> LocalState<T> {
         mark_state_with_id::<Rc<RefCell<T>>>(id);
     }
 
-    LocalState::new(id)
+    State::new(id)
 }
 
-pub struct LocalState<T> {
+pub struct State<T> {
     data: Rc<RefCell<T>>,
 }
 
-impl<T> std::fmt::Debug for LocalState<T>
+impl<T> std::fmt::Debug for State<T>
 where
     T: std::fmt::Debug,
 {
@@ -46,21 +46,27 @@ where
     }
 }
 
-impl<T> Clone for LocalState<T> {
-    fn clone(&self) -> LocalState<T> {
-        LocalState::<T> {
+impl<T> Clone for State<T> {
+    fn clone(&self) -> State<T> {
+        State::<T> {
             data: self.data.clone(),
         }
     }
 }
 
-impl<T> LocalState<T>
+impl<T> State<T>
 where
     T: 'static,
 {
-    fn new(id: Id) -> LocalState<T> {
-        LocalState {
+    fn new(id: Id) -> Self {
+        Self {
             data: read_state_with_id::<Rc<RefCell<T>>, _, Rc<RefCell<T>>>(id, |x| x.clone()),
+        }
+    }
+
+    pub fn controlled(data: T) -> Self {
+        Self {
+            data: Rc::new(RefCell::new(data))
         }
     }
 
@@ -265,7 +271,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn set_count(n: i32) -> LocalState<i32> {
+    fn set_count(n: i32) -> State<i32> {
         root(|| use_state(|| n))
     }
 
