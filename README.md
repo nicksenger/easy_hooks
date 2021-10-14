@@ -30,7 +30,7 @@ pub fn main() {
     println!("{}", count.get(|n| *n)); // 500
 }
 
-fn set_count(n: i32) -> LocalState<i32> {
+fn set_count(n: i32) -> State<i32> {
     easy_hooks::root(|| easy_hooks::use_state(|| n))
 }
 ```
