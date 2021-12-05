@@ -76,7 +76,7 @@ where
 
     pub fn controlled(data: T) -> Self {
         Self {
-            data: Rc::new(RefCell::new(data))
+            data: Rc::new(RefCell::new(data)),
         }
     }
 
@@ -109,9 +109,7 @@ impl<T: 'static> Context<T> {
             mark_state_with_id::<*const T>(self.id);
         }
 
-        read_state_with_id::<*const T, _, ContextState<T>>(self.id, |x| {
-            ContextState::new(*x)
-        })
+        read_state_with_id::<*const T, _, ContextState<T>>(self.id, |x| ContextState::new(*x))
     }
 
     pub fn set<'a>(&self, data: &'a T) {
@@ -131,8 +129,8 @@ impl<T: 'static> ContextState<T> {
         Self { data }
     }
 
-    pub fn get<'a, U, F: FnOnce(&'a T) -> U>(&self, f: F) -> U {
-        f(unsafe { &*(self.data) })
+    pub unsafe fn with<'a, U, F: FnOnce(&'a T) -> U>(&self, f: F) -> U {
+        f(&*(self.data))
     }
 }
 
