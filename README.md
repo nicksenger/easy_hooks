@@ -1,4 +1,4 @@
-# Easy Hooks
+# Hooks
 
 This crate is a wrapper around the [topo](https://crates.io/crates/topo) crate which provides a couple functions to plug React-style hooks into your application.
 
