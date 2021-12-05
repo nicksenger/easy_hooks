@@ -87,6 +87,10 @@ where
     pub fn get<F: FnOnce(&T) -> U, U>(&self, func: F) -> U {
         func(&self.data.borrow())
     }
+
+    pub unsafe fn with<'a, U, F: FnOnce(&'a T) -> U>(&self, f: F) -> U {
+        f(&*self.data.as_ptr())
+    }
 }
 
 pub struct Context<T> {
